@@ -1,0 +1,11 @@
+name: ibcheetah
+description: Fetch IBC channels, connections and clients
+version: 1.0.0
+
+environment:
+  sdk: '>=2.19.0-398.0.dev <3.0.0'
+
+dev_dependencies:
+  lints: ^2.1.0
+dependencies:
+  http: ^1.1.0
