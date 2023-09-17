@@ -1,5 +1,6 @@
 import process from 'process';
 import fetch from 'node-fetch';
+import fs from 'fs';
 
 if (process.argv.length != 4) {
   console.log('Usage: ibcheetah RPC CHAIN_ID');
@@ -33,32 +34,37 @@ const getChannels = async (rest) => {
   return await rest.getChannels();
 }
 
-const getClientStatuses = async (rest, clientIds) => {
-  let res = {}; // { [key: string]: string }
-
-  for (let i = 0; i < clientIds.length; i++) {
-    const item = clientIds[i];
-    if (!clientStatuses[item]) {
-      res.push(await rest.getClientStatus(item));
-    }
-  }
-
-  return res;
-}
-
 // supplements channels data with with its respective connections and clients information
-const combineData = async (connections, clients, channels, clientStatuses, targetChainId) => {
+const combineData = async (rest, connections, clients, channels, targetChainId) => {
   const res = [];
 
+  let clientStatuses = {}; // { [key: string]: string }
   for (var i = 0; i < channels.length; i++)  {
     let channel = channels[i];
 
     let connection = connections[channel.connectionHops[0]];
     let client = clients[connection.clientId];
     if (client.chainId == targetChainId) {
+      let clientStatus = clientStatuses[connection.clientId];
+      if (!clientStatus) {
+        clientStatus = await rest.getClientStatus(connection.clientId);
+          clientStatuses[connection.clientId] = clientStatus;
+      }
+  
       if (channel.state == 'STATE_INIT' && channel.counterpartyId == '') {
           channel.counterpartyId = 'does_not_exist';
       }
+
+      // TODO: need counterparty rest to do it?
+      // let counterpartyClientStatus = clientStatuses[connection.counterpartyClientId];
+      // if (!counterpartyClientStatus) {
+      //   counterpartyClientStatus = await rest.getClientStatus(connection.clientId);
+      //     clientStatuses[connection.clientId] = counterpartyClientStatus;
+      // }
+  
+      // if (channel.state == 'STATE_INIT' && channel.counterpartyId == '') {
+      //     channel.counterpartyId = 'does_not_exist';
+      // }
 
       res.push({
         channel: {
@@ -72,11 +78,11 @@ const combineData = async (connections, clients, channels, clientStatuses, targe
         connection: {
           connection_id:              channel.connectionHops[0],
           client_id:                  connection.clientId,
-          client_status:              clientStatuses[connection.clientId],
+          client_status:              clientStatus,
           counterparty_connection_id: connection.counterpartyId,
           counterparty_client_id:     connection.counterpartyClientId,
-          // counterparty_client_status: ?,
-          state:           connection.state,
+          // counterparty_client_status: counterpartyClientStatus,
+          connection_state:           connection.state,
         },
       });
     }
@@ -195,7 +201,7 @@ class Rest {
     let response = await fetch(endpoint);
     let result = await response.json();
 
-    console.log(result);
+    // console.log(result);
 
     let chainId = result.client_state.chain_id;
 
@@ -214,10 +220,19 @@ class Rest {
 const main = async (rest, targetChainId) => {
   const {connections, clients} = await getConnections(rest);
   const channels = await getChannels(rest);
-  const clientStatuses = await getClientStatuses(rest, channels.map(c => c.clientId))
-  const combinedData = combineData(connections, clients, channels, clientStatuses, targetChainId);
+  const combinedData = await combineData(rest, connections, clients, channels, targetChainId);
+  // TODO: output channels to stdout
   const output = JSON.stringify(combinedData, null, 2)
-  console.log(output);
+  // console.log(output);
+
+  try { 
+    fs.writeFileSync('out.json', output); 
+    console.log('File has been saved.');
+    } catch (error) { 
+    console.error(err); 
+    } 
+
+  // TODO: output to file to use it later
 }
 
 let rest = new Rest(process.argv[2]);
