@@ -8,7 +8,7 @@ if (process.argv.length != 4) {
   process.exit(1);
 }
 
-const writeConnections = async (rest) => {
+const getConnections = async (rest) => {
   let resConnections = {};
   let resClients = {};
   let connections = await rest.getConnections();
@@ -17,54 +17,87 @@ const writeConnections = async (rest) => {
     resConnections[connection.id] = connection;
   
     if (resClients[connection.clientId] === undefined) {
-      console.log("Connection: client_id: " + connection.clientId);
+      // console.log("Connection: client_id: " + connection.clientId);
       let client = await rest.getClient(connection.clientId);
       resClients[connection.clientId] = client;
-      process.stdout.write('+');
+      // process.stdout.write('+');
     } else {
-      process.stdout.write('.');
+      // process.stdout.write('.');
     }
   }
 
   return { connections: resConnections, clients: resClients };
 };
 
-const printChannels = async (rest, connections, clients) => {
+const getChannels = async (rest) => {
+  return await rest.getChannels();
+}
+
+const getClientStatuses = async (rest, clientIds) => {
+  let res = {}; // { [key: string]: string }
+
+  clientIds.forEach((clientId) => {
+    let clientStatus = clientStatuses[clientId] || await rest.getClientStatus(clientId);
+  });
+
+  return res;
+}
+
+// supplements channels data with with its respective connections and clients information
+const combineData = async (rest, connections, clients, channels, targetChainId, filters = {}) => {
+  const res = [];
+
   let clientStatuses = {}; // { [key: string]: string }
-  const channels = await rest.getChannels();
   for (var i = 0; i < channels.length; i++)  {
     let channel = channels[i];
 
     let connection = connections[channel.connectionHops[0]];
     let client = clients[connection.clientId];
     if (client.chainId == targetChainId) {
-      let status = clientStatuses[connection.clientId];
-      if (status === undefined) {
-          status = await rest.getClientStatus(connection.clientId);
-          clientStatuses[connection.clientId] = status;
+      let clientStatus = clientStatuses[connection.clientId];
+      if (!clientStatus) {
+        clientStatus = await rest.getClientStatus(connection.clientId);
+          clientStatuses[connection.clientId] = clientStatus;
       }
   
       if (channel.state == 'STATE_INIT' && channel.counterpartyId == '') {
-          channel.counterpartyId = 'unknown';
+          channel.counterpartyId = 'does_not_exist';
       }
+
+      // TODO: need counterparty rest to do it?
+      // let counterpartyClientStatus = clientStatuses[connection.counterpartyClientId];
+      // if (!counterpartyClientStatus) {
+      //   counterpartyClientStatus = await rest.getClientStatus(connection.clientId);
+      //     clientStatuses[connection.clientId] = counterpartyClientStatus;
+      // }
   
-      console.log(`Pair:
-    channel_id:                 ${channel.id}
-    port_id:                    ${channel.port}
-    counterparty_channel_id:    ${channel.counterpartyId}
-    counterparty_port_id:       ${channel.counterpartyPort}
-    ordering:                   ${channel.ordering}
-    state:                      ${channel.state}
-  Over connection:
-    connection_id:              ${channel.connectionHops[0]}
-    client_id:                  ${connection.clientId}
-    client_status:              ${status}
-    counterparty_connection_id: ${connection.counterpartyId}
-    counterparty_client_id:     ${connection.counterpartyClientId}
-    state:                      ${connection.state}`
-      );
+      // if (channel.state == 'STATE_INIT' && channel.counterpartyId == '') {
+      //     channel.counterpartyId = 'does_not_exist';
+      // }
+
+      res.push({
+        channel: {
+          id:                         channel.id,
+          port_id:                    channel.port,
+          counterparty_id:            channel.counterpartyId,
+          counterparty_port_id:       channel.counterpartyPort,
+          ordering:                   channel.ordering,
+          state:                      channel.state,
+        },
+        connection: {
+          connection_id:              channel.connectionHops[0],
+          client_id:                  connection.clientId,
+          client_status:              clientStatus,
+          counterparty_connection_id: connection.counterpartyId,
+          counterparty_client_id:     connection.counterpartyClientId,
+          // counterparty_client_status: counterpartyClientStatus,
+          connection_state:           connection.state,
+        },
+      });
     }
   }
+
+  return res;
 }
 
 class Client {
@@ -112,7 +145,13 @@ class Rest {
       for (let connection of result.connections) {
         let counterparty = connection.counterparty;
 
-        res.push(new Connection(connection.id, connection.client_id, connection.state, counterparty.connection_id, counterparty.client_id));
+        res.push(new Connection(
+          connection.id,
+          connection.client_id,
+          connection.state,
+          counterparty.connection_id,
+          counterparty.client_id,
+        ));
       }
 
       let nextKey = result.pagination.next_key;
@@ -142,8 +181,15 @@ class Rest {
           connectionHops.push(hop);
         }
 
-        const chan = new Channel(channel.channel_id, channel.port_id, connectionHops, channel.counterparty.channel_id, channel.counterparty.port_id, channel.ordering, channel.state);
-        res.push(chan);
+        res.push(new Channel(
+          channel.channel_id,
+          channel.port_id,
+          connectionHops,
+          channel.counterparty.channel_id,
+          channel.counterparty.port_id,
+          channel.ordering,
+          channel.state,
+        ));
       }
 
       let nextKey = result.pagination.next_key;
@@ -180,16 +226,16 @@ class Rest {
   }
 }
 
-const main = async (rest) => {
-  const {connections, clients} = await writeConnections(rest);
-  await printChannels(rest, connections, clients);
+const main = async (rest, targetChainId) => {
+  const {connections, clients} = await getConnections(rest);
+  const channels = getChannels(rest);
+  const combinedData = combineData(rest, connections, clients, channels, targetChainId);
+  // TODO: output channels to stdout
+  const output = JSON.stringify(combinedData, null, 2)
+  console.log(output);
 }
 
 let rest = new Rest(process.argv[2]);
 let targetChainId = process.argv[3];
-console.log("Rest: " + process.argv[2]);
-console.log("Target chain: " + process.argv[3]);
 
-console.log('Fetching clients');
-
-main(rest).then();
+main(rest, targetChainId).then();
