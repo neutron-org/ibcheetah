@@ -172,7 +172,7 @@ class Rest {
     final result =
         json.decode(await http.read(endpoint)) as Map<String, dynamic>;
 
-    final chainId = result["client_state"]["chain_id"];
+    final chainId = (result["client_state"]["chain_id"] as String?) ?? "<N/A>";
 
     return Client(clientId, chainId);
   }
